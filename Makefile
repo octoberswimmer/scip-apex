@@ -86,31 +86,35 @@ release: checksum
 	gh release create "$(VERSION)" --title "scip-apex $(VERSION)" --notes-from-tag --verify-tag $(RELEASE_ASSETS)
 
 tag:
-	@set -euo pipefail; \
-	if ! git diff --quiet || ! git diff --cached --quiet; then \
-		echo "Working tree must be clean before running 'make tag'."; \
-		exit 1; \
-	fi; \
-	latest_tag=$$(git tag --list 'v*' --sort=v:refname | tail -n1 || true); \
-	if [ -z "$$latest_tag" ]; then \
-		next_tag="v0.1.0"; \
+	@echo "Creating next tag..."
+	@bash -c ' \
+	PREV_TAG=$$(git tag --sort=-version:refname | head -1); \
+	if [ -z "$$PREV_TAG" ]; then \
+		NEXT_TAG="v0.0.1"; \
 	else \
-		if [[ $$latest_tag =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$$ ]]; then \
-			major=$${BASH_REMATCH[1]}; \
-			minor=$${BASH_REMATCH[2]}; \
-			patch=$${BASH_REMATCH[3]}; \
-			next_tag="v$${major}.$$((minor + 1)).0"; \
-		else \
-			echo "Latest tag '$$latest_tag' is not a vX.Y.Z semver tag."; \
-			exit 1; \
-		fi; \
+		VERSION=$$(echo $$PREV_TAG | sed "s/v//"); \
+		MAJOR=$$(echo $$VERSION | cut -d. -f1); \
+		MINOR=$$(echo $$VERSION | cut -d. -f2); \
+		PATCH=$$(echo $$VERSION | cut -d. -f3); \
+		NEXT_MINOR=$$((MINOR + 1)); \
+		NEXT_TAG="v$$MAJOR.$$NEXT_MINOR.0"; \
 	fi; \
-	if git rev-parse --verify --quiet "refs/tags/$$next_tag" >/dev/null; then \
-		echo "Tag $$next_tag already exists locally."; \
-		exit 1; \
-	fi; \
-	echo "Tagging $$next_tag"; \
-	git tag -s "$$next_tag"
+	echo "Previous tag: $$PREV_TAG"; \
+	echo "Next tag: $$NEXT_TAG"; \
+	echo ""; \
+	echo "Changelog:"; \
+	git changelog $$PREV_TAG..; \
+	echo ""; \
+	read -p "Create tag $$NEXT_TAG? [y/N] " -n 1 -r; \
+	echo ""; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		CHANGELOG=$$(git changelog $$PREV_TAG..); \
+		git tag -a $$NEXT_TAG -m "Version $$NEXT_TAG" -m "" -m "$$CHANGELOG"; \
+		echo "Tag $$NEXT_TAG created successfully"; \
+		echo "Push with: git push octoberswimmer $$NEXT_TAG"; \
+	else \
+		echo "Tag creation cancelled"; \
+	fi'
 
 clean:
 	-rm -f $(EXECUTABLE) $(EXECUTABLE).exe $(EXECUTABLE)_* *.zip SHA256SUMS-*
