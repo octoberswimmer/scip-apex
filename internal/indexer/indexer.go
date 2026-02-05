@@ -32,6 +32,11 @@ func Run(opts Options) error {
 		return fmt.Errorf("no Apex source files found")
 	}
 
+	objectCU := parseObjectFiles(opts.SourceDirs)
+	if objectCU != nil {
+		cu.Classes = append(cu.Classes, objectCU.Classes...)
+	}
+
 	builder := resolution.NewBuilder()
 	if err := builder.AddStandardLibrary(); err != nil {
 		return fmt.Errorf("loading standard library: %w", err)

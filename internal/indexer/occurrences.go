@@ -66,27 +66,28 @@ func (db *documentBuilder) addOccurrence(doc *scip.Document, line, col, endCol i
 
 func (db *documentBuilder) buildDefinitions() {
 	for _, cls := range db.graph.AllClasses() {
-		if cls.Declaration == nil || cls.Declaration.FilePath == "" {
+		if cls.Declaration == nil {
 			continue
 		}
-		doc := db.getOrCreateDoc(cls.Declaration.FilePath)
-		sym := scipSymbol(db.graph, cls.ID)
-		if sym == "" {
-			continue
+		if cls.Declaration.FilePath != "" && !isMetadataXML(cls.Declaration.FilePath) {
+			doc := db.getOrCreateDoc(cls.Declaration.FilePath)
+			sym := scipSymbol(db.graph, cls.ID)
+			if sym != "" {
+				db.addOccurrence(doc,
+					cls.Declaration.Line-1,
+					cls.Declaration.Column,
+					cls.Declaration.Column+len(cls.Declaration.Name),
+					sym,
+					int32(scip.SymbolRole_Definition),
+				)
+				si := db.symbolInfo(sym, cls.Declaration.Name, scipKind(resolution.SymbolKindClass))
+				if cls.Declaration.DocComment != "" {
+					si.Documentation = []string{cls.Declaration.DocComment}
+				}
+				db.addImplementsRelationships(si, cls.Implements)
+				db.addExtendsRelationship(si, cls.Extends)
+			}
 		}
-		db.addOccurrence(doc,
-			cls.Declaration.Line-1,
-			cls.Declaration.Column,
-			cls.Declaration.Column+len(cls.Declaration.Name),
-			sym,
-			int32(scip.SymbolRole_Definition),
-		)
-		si := db.symbolInfo(sym, cls.Declaration.Name, scipKind(resolution.SymbolKindClass))
-		if cls.Declaration.DocComment != "" {
-			si.Documentation = []string{cls.Declaration.DocComment}
-		}
-		db.addImplementsRelationships(si, cls.Implements)
-		db.addExtendsRelationship(si, cls.Extends)
 		db.registerFields(cls)
 		db.registerMethods(cls.Declaration.FilePath, cls.Methods)
 		db.registerNestedDeclarations(cls)
@@ -153,7 +154,7 @@ func (db *documentBuilder) buildDefinitions() {
 }
 
 func (db *documentBuilder) registerFields(cls *resolution.ClassSymbol) {
-	if cls.Declaration == nil || cls.Declaration.FilePath == "" {
+	if cls.Declaration == nil {
 		return
 	}
 	for _, fieldID := range cls.Fields {
@@ -161,7 +162,14 @@ func (db *documentBuilder) registerFields(cls *resolution.ClassSymbol) {
 		if !ok || field.Declaration == nil {
 			continue
 		}
-		doc := db.getOrCreateDoc(cls.Declaration.FilePath)
+		filePath := cls.Declaration.FilePath
+		if field.Declaration.FilePath != "" {
+			filePath = field.Declaration.FilePath
+		}
+		if filePath == "" || isMetadataXML(filePath) {
+			continue
+		}
+		doc := db.getOrCreateDoc(filePath)
 		sym := scipSymbol(db.graph, fieldID)
 		if sym == "" {
 			continue
@@ -427,6 +435,12 @@ func (db *documentBuilder) addExtendsRelationships(si *scip.SymbolInformation, e
 	for _, extID := range extendsIDs {
 		db.addExtendsRelationship(si, extID)
 	}
+}
+
+func isMetadataXML(filePath string) bool {
+	return strings.HasSuffix(filePath, ".object-meta.xml") ||
+		strings.HasSuffix(filePath, ".field-meta.xml") ||
+		strings.HasSuffix(filePath, ".object")
 }
 
 func (db *documentBuilder) documents() []*scip.Document {

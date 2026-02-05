@@ -48,7 +48,7 @@ func TestIndex_produces_documents(t *testing.T) {
 	for _, doc := range index.Documents {
 		foundFiles[doc.RelativePath] = true
 	}
-	for _, expected := range []string{"MyClass.cls", "Greeter.cls", "Callable.cls", "Season.cls", "Worker.cls", "Outer.cls", "AccountTrigger.trigger"} {
+	for _, expected := range []string{"MyClass.cls", "Greeter.cls", "Callable.cls", "Season.cls", "Worker.cls", "Outer.cls", "AccountTrigger.trigger", "CustomObjectUser.cls"} {
 		if !foundFiles[expected] {
 			t.Errorf("expected document for %s, got files: %v", expected, foundFiles)
 		}
@@ -280,6 +280,111 @@ func TestIndex_implements_relationship(t *testing.T) {
 		}
 	}
 	t.Error("no SymbolInformation found for Worker class")
+}
+
+func TestIndex_custom_object_metadata_files_not_indexed(t *testing.T) {
+	index := indexTestdata(t)
+	for _, doc := range index.Documents {
+		if strings.HasSuffix(doc.RelativePath, ".object-meta.xml") ||
+			strings.HasSuffix(doc.RelativePath, ".field-meta.xml") ||
+			strings.HasSuffix(doc.RelativePath, ".object") {
+			t.Errorf("metadata XML file should not be indexed as a document: %s", doc.RelativePath)
+		}
+	}
+}
+
+func TestIndex_custom_object_reference_from_apex(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "CustomObjectUser.cls")
+	refOccs := referenceOccurrences(doc)
+	found := false
+	for _, occ := range refOccs {
+		if strings.Contains(occ.Symbol, "TestObject__c") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no reference to TestObject__c found in CustomObjectUser.cls")
+	}
+}
+
+func TestIndex_custom_field_reference_from_apex(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "CustomObjectUser.cls")
+	refOccs := referenceOccurrences(doc)
+	found := false
+	for _, occ := range refOccs {
+		if strings.Contains(occ.Symbol, "CustomField__c") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no reference to CustomField__c found in CustomObjectUser.cls")
+	}
+}
+
+func TestIndex_standard_object_field_reference_from_trigger(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "AccountTrigger.trigger")
+	refOccs := referenceOccurrences(doc)
+	found := false
+	for _, occ := range refOccs {
+		if strings.Contains(occ.Symbol, "Account#") && strings.HasSuffix(occ.Symbol, "Name.") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no reference to Account.Name found in AccountTrigger.trigger")
+	}
+}
+
+func TestIndex_trigger_sobject_type_reference_exists(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "AccountTrigger.trigger")
+	refOccs := referenceOccurrences(doc)
+	found := false
+	for _, occ := range refOccs {
+		if strings.HasSuffix(occ.Symbol, "Account#") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no type reference to Account found in AccountTrigger.trigger")
+	}
+}
+
+func TestIndex_foreach_type_reference_exists(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "AccountTrigger.trigger")
+	refOccs := referenceOccurrences(doc)
+	count := 0
+	for _, occ := range refOccs {
+		if strings.HasSuffix(occ.Symbol, "Account#") {
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("expected at least 2 Account type references (trigger + for-each), got %d", count)
+	}
+}
+
+func TestIndex_variable_declaration_type_reference_exists(t *testing.T) {
+	index := indexTestdata(t)
+	doc := findDoc(t, index, "CustomObjectUser.cls")
+	refOccs := referenceOccurrences(doc)
+	count := 0
+	for _, occ := range refOccs {
+		if strings.HasSuffix(occ.Symbol, "TestObject__c#") {
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("expected at least 2 TestObject__c references (variable type + constructor), got %d", count)
+	}
 }
 
 func findDoc(t *testing.T, index *scip.Index, name string) *scip.Document {
