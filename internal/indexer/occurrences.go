@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/octoberswimmer/aer/ast"
@@ -10,22 +11,24 @@ import (
 )
 
 type documentBuilder struct {
-	graph       *resolution.SymbolGraph
-	binding     *resolution.BindingResult
-	projectRoot string
-	localCount  map[string]int
-	docs        map[string]*scip.Document
-	symbolInfos map[string]*scip.SymbolInformation
+	graph        *resolution.SymbolGraph
+	binding      *resolution.BindingResult
+	projectRoot  string
+	localCount   map[string]int
+	localSymbols map[resolution.SymbolID]string
+	docs         map[string]*scip.Document
+	symbolInfos  map[string]*scip.SymbolInformation
 }
 
 func newDocumentBuilder(graph *resolution.SymbolGraph, binding *resolution.BindingResult, projectRoot string) *documentBuilder {
 	return &documentBuilder{
-		graph:       graph,
-		binding:     binding,
-		projectRoot: projectRoot,
-		localCount:  make(map[string]int),
-		docs:        make(map[string]*scip.Document),
-		symbolInfos: make(map[string]*scip.SymbolInformation),
+		graph:        graph,
+		binding:      binding,
+		projectRoot:  projectRoot,
+		localCount:   make(map[string]int),
+		localSymbols: make(map[resolution.SymbolID]string),
+		docs:         make(map[string]*scip.Document),
+		symbolInfos:  make(map[string]*scip.SymbolInformation),
 	}
 }
 
@@ -69,10 +72,10 @@ func (db *documentBuilder) buildDefinitions() {
 		if cls.Declaration == nil {
 			continue
 		}
-		if cls.Declaration.FilePath != "" && !isMetadataXML(cls.Declaration.FilePath) {
-			doc := db.getOrCreateDoc(cls.Declaration.FilePath)
-			sym := scipSymbol(db.graph, cls.ID)
-			if sym != "" {
+		sym := scipSymbol(db.graph, cls.ID)
+		if sym != "" {
+			if cls.Declaration.FilePath != "" && !isMetadataXML(cls.Declaration.FilePath) {
+				doc := db.getOrCreateDoc(cls.Declaration.FilePath)
 				db.addOccurrence(doc,
 					cls.Declaration.Line-1,
 					cls.Declaration.Column,
@@ -80,13 +83,13 @@ func (db *documentBuilder) buildDefinitions() {
 					sym,
 					int32(scip.SymbolRole_Definition),
 				)
-				si := db.symbolInfo(sym, cls.Declaration.Name, scipKind(resolution.SymbolKindClass))
-				if cls.Declaration.DocComment != "" {
-					si.Documentation = []string{cls.Declaration.DocComment}
-				}
-				db.addImplementsRelationships(si, cls.Implements)
-				db.addExtendsRelationship(si, cls.Extends)
 			}
+			si := db.symbolInfo(sym, cls.Declaration.Name, scipKind(resolution.SymbolKindClass))
+			if cls.Declaration.DocComment != "" {
+				si.Documentation = []string{cls.Declaration.DocComment}
+			}
+			db.addImplementsRelationships(si, cls.Implements)
+			db.addExtendsRelationship(si, cls.Extends)
 		}
 		db.registerFields(cls)
 		db.registerMethods(cls.Declaration.FilePath, cls.Methods)
@@ -162,14 +165,6 @@ func (db *documentBuilder) registerFields(cls *resolution.ClassSymbol) {
 		if !ok || field.Declaration == nil {
 			continue
 		}
-		filePath := cls.Declaration.FilePath
-		if field.Declaration.FilePath != "" {
-			filePath = field.Declaration.FilePath
-		}
-		if filePath == "" || isMetadataXML(filePath) {
-			continue
-		}
-		doc := db.getOrCreateDoc(filePath)
 		sym := scipSymbol(db.graph, fieldID)
 		if sym == "" {
 			continue
@@ -178,13 +173,20 @@ func (db *documentBuilder) registerFields(cls *resolution.ClassSymbol) {
 		if field.Declaration.Getter != nil || field.Declaration.Setter != nil {
 			kind = resolution.SymbolKindProperty
 		}
-		db.addOccurrence(doc,
-			field.Declaration.Line-1,
-			field.Declaration.Column,
-			field.Declaration.Column+len(field.Declaration.Name),
-			sym,
-			int32(scip.SymbolRole_Definition),
-		)
+		filePath := cls.Declaration.FilePath
+		if field.Declaration.FilePath != "" {
+			filePath = field.Declaration.FilePath
+		}
+		if filePath != "" && !isMetadataXML(filePath) {
+			doc := db.getOrCreateDoc(filePath)
+			db.addOccurrence(doc,
+				field.Declaration.Line-1,
+				field.Declaration.Column,
+				field.Declaration.Column+len(field.Declaration.Name),
+				sym,
+				int32(scip.SymbolRole_Definition),
+			)
+		}
 		db.symbolInfo(sym, field.Declaration.Name, scipKind(kind))
 	}
 }
@@ -233,11 +235,8 @@ func (db *documentBuilder) registerParameters(filePath string, method *resolutio
 			continue
 		}
 		sym := db.nextLocal(relPath)
-		doc := db.getOrCreateDoc(filePath)
-		// ParameterDeclaration doesn't have Line/Column, so we skip occurrence
-		// but still register the symbol info
+		db.localSymbols[paramID] = sym
 		db.symbolInfo(sym, param.Name, scipKind(resolution.SymbolKindParameter))
-		_ = doc
 	}
 }
 
@@ -353,8 +352,18 @@ func (db *documentBuilder) resolveSymbolString(symID resolution.SymbolID, filePa
 	// Variable symbols (parameters, locals) use document-local symbols
 	if v, ok := db.graph.VariableByID(symID); ok {
 		if v.Kind == resolution.SymbolKindParameter || v.Kind == resolution.SymbolKindLocalVariable {
+			if existing, ok := db.localSymbols[symID]; ok {
+				return existing
+			}
 			relPath := db.relativePath(filePath)
-			return db.nextLocal(relPath)
+			sym := db.nextLocal(relPath)
+			db.localSymbols[symID] = sym
+			name := ""
+			if decl, ok := v.Declaration.(*ast.ParameterDeclaration); ok && decl != nil {
+				name = decl.Name
+			}
+			db.symbolInfo(sym, name, scipKind(v.Kind))
+			return sym
 		}
 	}
 	return ""
@@ -443,19 +452,86 @@ func isMetadataXML(filePath string) bool {
 		strings.HasSuffix(filePath, ".object")
 }
 
-func (db *documentBuilder) documents() []*scip.Document {
+func (db *documentBuilder) documents() ([]*scip.Document, []*scip.SymbolInformation) {
+	attached := make(map[string]bool)
+
 	result := make([]*scip.Document, 0, len(db.docs))
 	for _, doc := range db.docs {
-		// Attach symbol infos to their documents
-		for _, si := range db.symbolInfos {
-			for _, occ := range doc.Occurrences {
-				if occ.Symbol == si.Symbol && occ.SymbolRoles&int32(scip.SymbolRole_Definition) != 0 {
-					doc.Symbols = append(doc.Symbols, si)
-					break
-				}
+		// Attach SymbolInformation for symbols defined in this document
+		for _, occ := range doc.Occurrences {
+			if occ.SymbolRoles&int32(scip.SymbolRole_Definition) == 0 {
+				continue
 			}
+			si, ok := db.symbolInfos[occ.Symbol]
+			if !ok || attached[occ.Symbol] {
+				continue
+			}
+			doc.Symbols = append(doc.Symbols, si)
+			attached[occ.Symbol] = true
 		}
 		result = append(result, doc)
 	}
-	return result
+
+	// Attach local symbol SymbolInformation to their referencing documents.
+	// Local symbols don't have definition occurrences (parameters lack
+	// line/column info), so they weren't attached in the first pass.
+	for _, doc := range result {
+		for _, occ := range doc.Occurrences {
+			if attached[occ.Symbol] || !strings.HasPrefix(occ.Symbol, "local ") {
+				continue
+			}
+			si, ok := db.symbolInfos[occ.Symbol]
+			if !ok {
+				continue
+			}
+			doc.Symbols = append(doc.Symbols, si)
+			attached[occ.Symbol] = true
+		}
+	}
+
+	// Include relationship target SymbolInformation in the referencing
+	// document's Symbols list. The scip lint tool processes documents
+	// via a Go map with non-deterministic iteration order, registering
+	// symbols and checking relationships within the same loop iteration.
+	// Without this, relationship targets defined in other documents may
+	// not be registered when the relationship is validated.
+	for _, doc := range result {
+		docSyms := make(map[string]bool)
+		for _, si := range doc.Symbols {
+			docSyms[si.Symbol] = true
+		}
+		n := len(doc.Symbols)
+		for i := 0; i < n; i++ {
+			si := doc.Symbols[i]
+			for _, rel := range si.Relationships {
+				if docSyms[rel.Symbol] {
+					continue
+				}
+				if !attached[rel.Symbol] {
+					continue // will be in external symbols, always findable
+				}
+				targetSI, ok := db.symbolInfos[rel.Symbol]
+				if !ok {
+					continue
+				}
+				doc.Symbols = append(doc.Symbols, targetSI)
+				docSyms[rel.Symbol] = true
+			}
+		}
+	}
+
+	// Remaining unattached symbols (e.g. metadata XML definitions) become external symbols
+	var external []*scip.SymbolInformation
+	for sym, si := range db.symbolInfos {
+		if !attached[sym] {
+			external = append(external, si)
+		}
+	}
+
+	// Sort documents by path for deterministic output.
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].RelativePath < result[j].RelativePath
+	})
+
+	return result, external
 }

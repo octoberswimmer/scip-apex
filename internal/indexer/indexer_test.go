@@ -282,6 +282,28 @@ func TestIndex_implements_relationship(t *testing.T) {
 	t.Error("no SymbolInformation found for Worker class")
 }
 
+func TestIndex_all_occurrences_have_symbol_information(t *testing.T) {
+	index := indexTestdata(t)
+	// Collect all SymbolInformation from documents and external symbols
+	knownSymbols := make(map[string]bool)
+	for _, doc := range index.Documents {
+		for _, si := range doc.Symbols {
+			knownSymbols[si.Symbol] = true
+		}
+	}
+	for _, si := range index.ExternalSymbols {
+		knownSymbols[si.Symbol] = true
+	}
+	for _, doc := range index.Documents {
+		for _, occ := range doc.Occurrences {
+			if !knownSymbols[occ.Symbol] {
+				t.Errorf("occurrence in %s at %v for symbol %s has no matching SymbolInformation",
+					doc.RelativePath, occ.Range, occ.Symbol)
+			}
+		}
+	}
+}
+
 func TestIndex_custom_object_metadata_files_not_indexed(t *testing.T) {
 	index := indexTestdata(t)
 	for _, doc := range index.Documents {

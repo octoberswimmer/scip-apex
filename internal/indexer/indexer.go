@@ -114,6 +114,7 @@ func buildIndex(graph *resolution.SymbolGraph, binding *resolution.BindingResult
 	db.buildDefinitions()
 	db.buildReferences()
 
+	docs, externalSymbols := db.documents()
 	return &scip.Index{
 		Metadata: &scip.Metadata{
 			Version: scip.ProtocolVersion_UnspecifiedProtocolVersion,
@@ -124,7 +125,8 @@ func buildIndex(graph *resolution.SymbolGraph, binding *resolution.BindingResult
 			ProjectRoot:          "file://" + projectRoot,
 			TextDocumentEncoding: scip.TextEncoding_UTF8,
 		},
-		Documents: db.documents(),
+		Documents:       docs,
+		ExternalSymbols: externalSymbols,
 	}
 }
 
@@ -158,7 +160,7 @@ func setNestedFilePaths(cls *ast.ClassDeclaration, filePath string) {
 }
 
 func writeIndex(index *scip.Index, outputFile string) error {
-	data, err := proto.Marshal(index)
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(index)
 	if err != nil {
 		return fmt.Errorf("marshaling index: %w", err)
 	}
