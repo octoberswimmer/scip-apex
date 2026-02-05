@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/octoberswimmer/scip-apex/internal/indexer"
+	"github.com/octoberswimmer/aer/indexer"
 	"github.com/spf13/cobra"
 )
 

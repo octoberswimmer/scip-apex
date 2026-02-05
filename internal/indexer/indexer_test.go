@@ -1,4 +1,4 @@
-package indexer
+package indexer_test
 
 import (
 	"os"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/octoberswimmer/aer/indexer"
 	scip "github.com/sourcegraph/scip/bindings/go/scip"
 	"google.golang.org/protobuf/proto"
 )
@@ -20,12 +21,12 @@ func indexTestdata(t *testing.T) *scip.Index {
 	t.Helper()
 	dir := testdataDir()
 	tmpFile := filepath.Join(t.TempDir(), "index.scip")
-	opts := Options{
+	opts := indexer.Options{
 		SourceDirs:  []string{dir},
 		OutputFile:  tmpFile,
 		ProjectRoot: dir,
 	}
-	if err := Run(opts); err != nil {
+	if err := indexer.Run(opts); err != nil {
 		t.Fatalf("indexing failed: %v", err)
 	}
 	data, err := os.ReadFile(tmpFile)
@@ -284,7 +285,6 @@ func TestIndex_implements_relationship(t *testing.T) {
 
 func TestIndex_all_occurrences_have_symbol_information(t *testing.T) {
 	index := indexTestdata(t)
-	// Collect all SymbolInformation from documents and external symbols
 	knownSymbols := make(map[string]bool)
 	for _, doc := range index.Documents {
 		for _, si := range doc.Symbols {
